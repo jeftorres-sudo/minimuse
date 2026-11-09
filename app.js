@@ -142,19 +142,27 @@ async function splitViews(blob) {
 const blobToDataURL = b => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });
 
 /* ---------- prompt ---------- */
-function buildPrompt() {
+function ideaText() {
   const idea = $("#idea").value.trim();
   const styles = [...state.styles].join(", ");
-  const want = [idea, styles && `style: ${styles}`].filter(Boolean).join(". ");
+  return [idea, styles && `style: ${styles}`].filter(Boolean).join(". ");
+}
+function sculptRule() {
+  if (state.mode === "mini" || state.sculpt === "none") return "Only change the paint. Do not add or change any shapes.";
+  if (state.sculpt === "small") return "Keep the toy's shape, but you may add a few small sculpted polymer clay add-ons that fit the idea (such as hair, horns, wings, bows, or accessories).";
+  return "Give it a full custom makeover with sculpted polymer clay add-ons (such as hair, mane, tail, wings, accessories) that fit the idea, while keeping the same base pose.";
+}
+function buildPrompt(recipe) {
+  const want = recipe ? `follow this exact design recipe for every panel:
+${recipe}
+` : ideaText() + ".";
   const kind = state.mode === "lps" ? "Littlest Pet Shop toy" : "tabletop miniature figure";
-  let sculpt;
-  if (state.mode === "mini" || state.sculpt === "none") sculpt = "Only change the paint. Do not add or change any shapes.";
-  else if (state.sculpt === "small") sculpt = "Keep the toy's shape, but you may add a few small sculpted polymer clay add-ons that fit the idea (such as hair, horns, wings, bows, or accessories).";
-  else sculpt = "Give it a full custom makeover with sculpted polymer clay add-ons (such as hair, mane, tail, wings, accessories) that fit the idea, while keeping the same base pose.";
+  const sculpt = sculptRule();
   return `This is a 2x2 grid of the same ${kind} photographed from four sides: top-left is the front, top-right is one side, bottom-left is the BACK (the back of the head, no face visible), bottom-right is the other side. ` +
     `Keep the 2x2 grid, keep each panel's camera angle exactly (the bottom-left panel must stay a back view with no face), and keep the toy's pose. ` +
-    `Repaint it as a hand-painted custom: ${want}. ${sculpt} ` +
-    `Use the exact same design and colors on every side so the four panels match. Make it look like a real painted toy, not a drawing. Replace the background with plain white.`;
+    `Repaint it as a hand-painted custom and ${want} ${sculpt} ` +
+    `Repaint every surface with the new design; keep the old paint only where the design says so. ` +
+    `It is ONE toy: every add-on has the same color, size and shape in all four panels, seen from that panel's angle. Make it look like a real painted toy, not a drawing. Replace the background with plain white.`;
 }
 function makeTitle() {
   const idea = $("#idea").value.trim();
@@ -198,16 +206,10 @@ async function paint(gridBlob, prompt, onStatus) {
   throw lastErr;
 }
 
-/* ---------- build plan (free Gemini text key) ---------- */
-async function makePlan(imageDataURL, ctx) {
-  const key = store.get("gemKey"); if (!key) return null;
-  const b64 = imageDataURL.split(",")[1];
-  const ask = `You are an expert ${ctx.mode === "lps" ? "Littlest Pet Shop customizer" : "miniature painter"}. The image shows a painted design idea for a figure from four sides. The idea was: "${ctx.idea}". ` +
-    `Write a practical build plan for a hobbyist using acrylic paints${ctx.mode === "lps" ? " and polymer or air-dry clay" : ""}. ` +
-    `Return JSON with: "paints": array of {"name": short color name, "hex": "#rrggbb" matching the image, "where": which parts}, ` +
-    `"clay": array of {"part": add-on name, "how": one sentence on shaping and attaching} (empty array if no add-ons), ` +
-    `"steps": array of 4-8 short ordered steps, "tip": one beginner tip. Keep every string short.`;
-  const body = { contents: [{ parts: [{ text: ask }, { inline_data: { mime_type: "image/jpeg", data: b64 } }] }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } };
+/* ---------- Gemini (free text key) ---------- */
+async function gemini(parts, json) {
+  const key = store.get("gemKey");
+  const body = { contents: [{ parts }], generationConfig: { temperature: 0.4, ...(json ? { responseMimeType: "application/json" } : {}) } };
   let lastErr;
   for (const model of ["gemini-flash-latest", "gemini-2.5-flash"]) {
     try {
@@ -215,10 +217,45 @@ async function makePlan(imageDataURL, ctx) {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error?.message || r.status);
       const txt = j.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
-      return JSON.parse(txt.replace(/^```json|```$/g, "").trim());
+      if (!txt.trim()) throw new Error("empty");
+      return txt.trim();
     } catch (e) { lastErr = e; console.warn(model, e); }
   }
   throw lastErr;
+}
+
+// Turn the short idea into one exact recipe so all four sides get the same design.
+const recipeCache = new Map();
+async function designRecipe(gridBlob) {
+  if (!store.get("gemKey")) return null;
+  const k = [state.mode, state.sculpt, ideaText()].join("|");
+  if (recipeCache.has(k)) return recipeCache.get(k);
+  const b64 = (await blobToDataURL(gridBlob)).split(",")[1];
+  const ask = `These 4 photos show one ${state.mode === "lps" ? "Littlest Pet Shop toy" : "miniature figure"} from the front, one side, the back, and the other side. ` +
+    `The owner wants to customize it with this idea: "${ideaText()}". Rule: ${sculptRule()} ` +
+    `Write one exact design recipe a painter could follow, with one short line per part in the form "part: description". ` +
+    `Cover head, face markings, eyes, ears (inside and outside), body, chest, legs, paws, tail, and each add-on. ` +
+    `For every add-on give its color, size, shape and exact placement, and say how it looks from the front, side and back. ` +
+    `Use plain color names, pick ONE color per item and never offer alternatives. Keep the toy's eye style unless the idea changes it. Max 120 words, no intro.`;
+  try {
+    const r = await gemini([{ text: ask }, { inline_data: { mime_type: "image/jpeg", data: b64 } }], false);
+    recipeCache.set(k, r); return r;
+  } catch { return null; }
+}
+
+/* ---------- build plan ---------- */
+async function makePlan(imageDataURL, ctx) {
+  const key = store.get("gemKey"); if (!key) return null;
+  const b64 = imageDataURL.split(",")[1];
+  const ask = `You are an expert ${ctx.mode === "lps" ? "Littlest Pet Shop customizer" : "miniature painter"}. The image shows a painted design idea for a figure from four sides. The idea was: "${ctx.idea}". ` +
+    `Write a practical build plan for a hobbyist using acrylic paints${ctx.mode === "lps" ? " and polymer or air-dry clay" : ""}. ` +
+    `Return JSON with: "paints": array of {"name": short color name, "hex": "#rrggbb" matching the image, "where": which parts}, ` +
+    `"clay": array of {"part": add-on name, "how": one sentence on shaping and attaching} (empty array if no add-ons), ` +
+    `"steps": array of 4-8 short ordered steps, "tip": one beginner tip. Keep every string short.` +
+    (ctx.recipe ? ` The design recipe was:
+${ctx.recipe}` : "");
+  const txt = await gemini([{ text: ask }, { inline_data: { mime_type: "image/jpeg", data: b64 } }], true);
+  return JSON.parse(txt.replace(/^```json|```$/g, "").trim());
 }
 
 /* ---------- generate flow ---------- */
@@ -230,11 +267,13 @@ async function generate() {
   timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $("#loadTime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 1000);
   try {
     const grid = await buildGrid();
-    const prompt = buildPrompt();
+    $("#loadMsg").textContent = "Planning the design…";
+    const recipe = await designRecipe(grid);
+    const prompt = buildPrompt(recipe);
     const out = await paint(grid, prompt, m => $("#loadMsg").textContent = m);
     const image = await blobToDataURL(out);
     const views = await splitViews(out);
-    const design = { id: "d" + Date.now(), date: Date.now(), title: makeTitle(), mode: state.mode, idea: $("#idea").value.trim() || [...state.styles].join(", "), image, views, plan: null, saved: false };
+    const design = { id: "d" + Date.now(), date: Date.now(), title: makeTitle(), mode: state.mode, idea: $("#idea").value.trim() || [...state.styles].join(", "), image, views, recipe, plan: null, saved: false };
     state.current = design;
     clearInterval(timer);
     $("#loadingCard").classList.add("hide");
@@ -283,6 +322,7 @@ function renderResult(box, d, fromGallery) {
       <img class="result-main" src="${d.image}" alt="Painted design from four sides">
       <div class="views">${d.views.map((v, i) => `<img src="${v}" data-v="${i}" alt="View ${i + 1}">`).join("")}</div>
       <p class="small muted" style="margin:6px 0 0">Tap a view to see it bigger.</p>
+      ${d.recipe ? `<details style="margin-top:10px"><summary class="small">Design recipe</summary><p class="small" style="white-space:pre-line;margin:6px 0 0">${esc(d.recipe)}</p></details>` : ""}
       <div class="row" style="margin-top:12px">
         ${fromGallery
           ? `<button class="btn act-del">Delete</button><button class="btn primary act-dl">Download</button>`
