@@ -90,6 +90,9 @@ nav.tabs button.on{color:var(--accent)}
 .viewer{position:fixed;inset:0;background:rgba(30,22,18,.92);z-index:20;display:flex;align-items:center;justify-content:center;padding:16px}
 .viewer img{max-width:100%;max-height:100%;border-radius:12px}
 .viewer button{position:absolute;top:14px;right:14px}
+.gstep{display:flex;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.gstep > b{flex:0 0 28px;height:28px;border-radius:50%;background:var(--accent-soft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-family:Fraunces,serif}
+.gstep > div{flex:1;min-width:0}
 .sheet-bg{position:fixed;inset:0;background:rgba(30,22,18,.45);z-index:15;display:flex;align-items:flex-end;justify-content:center}
 .sheet{background:var(--card);width:100%;max-width:560px;border-radius:20px 20px 0 0;padding:18px 16px calc(18px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px}
 .sheet h3{margin-bottom:4px}
@@ -142,9 +145,10 @@ a{color:var(--accent)}
         <div class="chips" id="styles"></div>
         <div id="ideaErr" class="err hide">Type an idea or tap a style.</div>
       </div>
-      <div class="row">
+      <button class="btn primary block" id="makeGem">Paint with Gemini (best)</button>
+      <div class="row" style="margin-top:10px">
         <button class="btn ghost" id="backPhotos">Back</button>
-        <button class="btn primary" id="makeIt">Make my idea</button>
+        <button class="btn" id="makeIt">Quick paint (free tool)</button>
       </div>
     </div>
 
@@ -156,6 +160,25 @@ a{color:var(--accent)}
           <p class="muted small" id="loadSub">Free tools take about 1–2 minutes. Keep this page open.</p>
           <p class="small" id="loadTime">0:00</p>
         </div>
+      </div>
+      <div class="card hide" id="gemCard">
+        <h2>Paint with Gemini</h2>
+        <p id="gemReady" class="small muted" style="margin:4px 0 12px">Getting your photos ready…</p>
+        <div class="gstep"><b>1</b><div>
+          <p style="margin:0 0 8px">Send your photos and prompt to Gemini. Pick <b>Gemini</b> in the share menu.</p>
+          <button class="btn primary block" id="gemShare">Send to Gemini</button>
+          <p class="small muted" style="margin:8px 0 0">The prompt is copied too. If Gemini's box is empty, long-press it and tap Paste.</p>
+          <details style="margin-top:8px"><summary class="small">Share not working?</summary>
+            <div class="row" style="margin-top:8px"><button class="btn" id="gemSaveGrid">Save photo</button><button class="btn" id="gemCopy">Copy prompt</button></div>
+            <p class="small muted" style="margin:8px 0 0">Then open <a href="https://gemini.google.com/app" target="_blank" rel="noopener">Gemini</a>, add the saved photo and paste the prompt.</p>
+          </details>
+          <p id="gemMsg" class="small" style="margin:8px 0 0"></p>
+        </div></div>
+        <div class="gstep"><b>2</b><div>
+          <p style="margin:0 0 8px">When Gemini is done, download its picture, then add it here.</p>
+          <button class="btn primary block" id="gemAdd">Add Gemini result</button>
+        </div></div>
+        <button class="btn ghost block" id="gemBack" style="margin-top:6px">Change idea</button>
       </div>
       <div class="card hide" id="failCard">
         <h2>That didn't work</h2>
@@ -213,6 +236,7 @@ a{color:var(--accent)}
 
 <div class="viewer hide" id="viewer"><img id="viewerImg" alt="Design view"><button class="btn" id="viewerClose">Close</button></div>
 <input type="file" id="fileIn" accept="image/*" class="hide">
+<input type="file" id="gemIn" accept="image/*" class="hide">
 <input type="file" id="camIn" accept="image/*" capture="environment" class="hide">
 <div class="sheet-bg hide" id="sheet">
   <div class="sheet" role="dialog" aria-labelledby="sheetTitle">

@@ -102,8 +102,10 @@ $("#styles").addEventListener("click", e => {
 });
 $("#idea").addEventListener("input", () => $("#ideaErr").classList.add("hide"));
 $("#backPhotos").addEventListener("click", () => goStep(1));
+const ideaOK = () => { if (!$("#idea").value.trim() && !state.styles.size) { $("#ideaErr").classList.remove("hide"); return false; } return true; };
+$("#makeGem").addEventListener("click", () => { if (ideaOK()) startGemini(); });
 $("#makeIt").addEventListener("click", () => {
-  if (!$("#idea").value.trim() && !state.styles.size) { $("#ideaErr").classList.remove("hide"); return; }
+  if (!ideaOK()) return;
   if (!store.get("hfToken")) { alert("Add your free Hugging Face token in Settings first."); showTab("settings"); return; }
   generate();
 });
@@ -261,8 +263,9 @@ ${ctx.recipe}` : "");
 /* ---------- generate flow ---------- */
 let timer;
 async function generate() {
+  state.lastMode = "free";
   goStep(3);
-  $("#loadingCard").classList.remove("hide"); $("#failCard").classList.add("hide"); $("#resultBox").classList.add("hide");
+  $("#loadingCard").classList.remove("hide"); $("#failCard").classList.add("hide"); $("#resultBox").classList.add("hide"); $("#gemCard").classList.add("hide");
   const t0 = Date.now(); clearInterval(timer);
   timer = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $("#loadTime").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }, 1000);
   try {
@@ -271,15 +274,8 @@ async function generate() {
     const recipe = await designRecipe(grid);
     const prompt = buildPrompt(recipe);
     const out = await paint(grid, prompt, m => $("#loadMsg").textContent = m);
-    const image = await blobToDataURL(out);
-    const views = await splitViews(out);
-    const design = { id: "d" + Date.now(), date: Date.now(), title: makeTitle(), mode: state.mode, idea: $("#idea").value.trim() || [...state.styles].join(", "), image, views, recipe, plan: null, saved: false };
-    state.current = design;
     clearInterval(timer);
-    $("#loadingCard").classList.add("hide");
-    renderResult($("#resultBox"), design, false);
-    $("#resultBox").classList.remove("hide");
-    loadPlan(design, $("#resultBox"));
+    await finishDesign(out, recipe);
   } catch (e) {
     clearInterval(timer);
     $("#loadingCard").classList.add("hide");
@@ -287,6 +283,60 @@ async function generate() {
     $("#failCard").classList.remove("hide");
   }
 }
+
+async function finishDesign(blob, recipe) {
+  const image = await blobToDataURL(blob);
+  const views = await splitViews(blob);
+  const design = { id: "d" + Date.now(), date: Date.now(), title: makeTitle(), mode: state.mode, idea: $("#idea").value.trim() || [...state.styles].join(", "), image, views, recipe, plan: null, saved: false };
+  state.current = design;
+  $("#loadingCard").classList.add("hide"); $("#gemCard").classList.add("hide"); $("#failCard").classList.add("hide");
+  renderResult($("#resultBox"), design, false);
+  $("#resultBox").classList.remove("hide");
+  loadPlan(design, $("#resultBox"));
+}
+
+/* ---------- Gemini mode: share out to the Gemini app, add the result back ---------- */
+async function startGemini() {
+  state.lastMode = "gemini";
+  goStep(3);
+  ["#loadingCard", "#failCard", "#resultBox"].forEach(id => $(id).classList.add("hide"));
+  $("#gemCard").classList.remove("hide"); $("#gemMsg").textContent = "";
+  $("#gemShare").disabled = true; $("#gemReady").textContent = "Getting your photos ready…";
+  const grid = await buildGrid();
+  if (store.get("gemKey")) $("#gemReady").textContent = "Planning the design…";
+  const recipe = await designRecipe(grid);
+  state.gem = { file: new File([grid], "minimuse-photos.jpg", { type: "image/jpeg" }), recipe,
+    prompt: "Edit this image. " + buildPrompt(recipe) + " Return one image that keeps the same 2x2 grid layout." };
+  $("#gemShare").disabled = false;
+  $("#gemReady").textContent = recipe ? "Ready. Your design recipe is in the prompt." : "Ready.";
+}
+async function copyPrompt() {
+  try { await navigator.clipboard.writeText(state.gem.prompt); return true; } catch { return false; }
+}
+function saveGrid() {
+  const a = document.createElement("a"); a.href = URL.createObjectURL(state.gem.file); a.download = state.gem.file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+$("#gemShare").onclick = async () => {
+  if (!state.gem) return;
+  const copied = await copyPrompt();
+  const data = { files: [state.gem.file], text: state.gem.prompt, title: "MiniMuse" };
+  if (navigator.canShare && navigator.canShare(data)) {
+    try { await navigator.share(data); $("#gemMsg").textContent = ""; return; }
+    catch (e) { if (e.name === "AbortError") return; }
+  }
+  saveGrid();
+  $("#gemMsg").textContent = `Sharing isn't available here, so the photo was saved${copied ? " and the prompt copied" : ""}. Open Gemini, add the photo and paste the prompt.`;
+};
+$("#gemSaveGrid").onclick = () => state.gem && saveGrid();
+$("#gemCopy").onclick = async () => { if (state.gem) $("#gemMsg").textContent = (await copyPrompt()) ? "Prompt copied." : "Couldn't copy. Try Send to Gemini."; };
+$("#gemAdd").onclick = () => { $("#gemIn").value = ""; $("#gemIn").click(); };
+$("#gemIn").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  await finishDesign(f, state.gem?.recipe || null);
+  window.scrollTo(0, 0);
+});
+$("#gemBack").onclick = () => goStep(2);
 
 async function loadPlan(design, box) {
   const slot = $(".planSlot", box); if (!slot) return;
@@ -338,7 +388,7 @@ function renderResult(box, d, fromGallery) {
     $(".act-dl", box).onclick = () => { const a = document.createElement("a"); a.href = d.image; a.download = `minimuse-${d.title.replace(/\W+/g, "-")}.png`; a.click(); };
     if (!d.plan) loadPlan(d, box);
   } else {
-    $(".act-again", box).onclick = () => generate();
+    $(".act-again", box).onclick = () => state.lastMode === "gemini" ? startGemini() : generate();
     $(".act-tweak", box).onclick = () => goStep(2);
     $(".act-save", box).onclick = async e => { d.saved = true; await dbPut(d); e.target.textContent = "Saved"; };
     $(".act-new", box).onclick = () => { state.photos.forEach(p => p && URL.revokeObjectURL(p.url)); state.photos = [null, null, null, null]; renderSlots(); goStep(1); };
