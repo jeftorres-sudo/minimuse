@@ -56,14 +56,22 @@ $("#slots").addEventListener("click", e => {
   const x = e.target.closest("[data-x]");
   if (x) { e.stopPropagation(); const i = +x.dataset.x; URL.revokeObjectURL(state.photos[i].url); state.photos[i] = null; renderSlots(); return; }
   const s = e.target.closest(".slot"); if (!s) return;
-  pickIndex = +s.dataset.i; $("#fileIn").value = ""; $("#fileIn").click();
+  pickIndex = +s.dataset.i;
+  $("#sheetTitle").textContent = `Add ${LABELS[pickIndex].toLowerCase()} photo`;
+  $("#sheet").classList.remove("hide");
 });
-$("#fileIn").addEventListener("change", async e => {
+const closeSheet = () => $("#sheet").classList.add("hide");
+const openPicker = id => { closeSheet(); $(id).value = ""; $(id).click(); };
+$("#pickCam").onclick = () => openPicker("#camIn");
+$("#pickGal").onclick = () => openPicker("#fileIn");
+$("#pickCancel").onclick = closeSheet;
+$("#sheet").addEventListener("click", e => { if (e.target.id === "sheet") closeSheet(); });
+["#fileIn", "#camIn"].forEach(id => $(id).addEventListener("change", e => {
   const f = e.target.files[0]; if (!f) return;
+  if (state.photos[pickIndex]) URL.revokeObjectURL(state.photos[pickIndex].url);
   state.photos[pickIndex] = { file: f, url: URL.createObjectURL(f) };
-  // fill next empty slot next time
   renderSlots(); $("#photoErr").classList.add("hide");
-});
+}));
 $("#toIdea").addEventListener("click", () => {
   if (state.photos.some(p => !p)) { $("#photoErr").classList.remove("hide"); return; }
   goStep(2);
