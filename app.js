@@ -317,16 +317,21 @@ function saveGrid() {
   const a = document.createElement("a"); a.href = URL.createObjectURL(state.gem.file); a.download = state.gem.file.name; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
-$("#gemShare").onclick = async () => {
+$("#gemShare").onclick = () => {
   if (!state.gem) return;
-  const copied = await copyPrompt();
-  const data = { files: [state.gem.file], text: state.gem.prompt, title: "MiniMuse" };
-  if (navigator.canShare && navigator.canShare(data)) {
-    try { await navigator.share(data); $("#gemMsg").textContent = ""; return; }
-    catch (e) { if (e.name === "AbortError") return; }
-  }
-  saveGrid();
-  $("#gemMsg").textContent = `Sharing isn't available here, so the photo was saved${copied ? " and the prompt copied" : ""}. Open Gemini, add the photo and paste the prompt.`;
+  // Share right away inside the tap (no waiting first), and send only the photo:
+  // some phones drop the share when text is attached. The prompt goes to the clipboard.
+  const copying = copyPrompt();
+  const data = { files: [state.gem.file] };
+  const fallback = async why => {
+    saveGrid();
+    const copied = await copying;
+    $("#gemMsg").textContent = `Couldn't open the share menu${why ? ` (${why})` : ""}, so the photo was saved to your phone${copied ? " and the prompt copied" : ""}. Open Gemini, add that photo and paste the prompt.`;
+  };
+  if (!(navigator.canShare && navigator.canShare(data))) { fallback("not supported"); return; }
+  navigator.share(data)
+    .then(async () => { $("#gemMsg").textContent = (await copying) ? "In Gemini, long-press the text box and tap Paste to add the prompt, then send." : "Now tap Copy prompt under Share not working, and paste it in Gemini."; })
+    .catch(e => { if (e.name !== "AbortError") fallback(e.name); });
 };
 $("#gemSaveGrid").onclick = () => state.gem && saveGrid();
 $("#gemCopy").onclick = async () => { if (state.gem) $("#gemMsg").textContent = (await copyPrompt()) ? "Prompt copied." : "Couldn't copy. Try Send to Gemini."; };
